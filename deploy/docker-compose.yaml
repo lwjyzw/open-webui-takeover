@@ -1,0 +1,59 @@
+# ============================================================================
+# open-webui 二次开发部署（接管版）
+#
+# 相对上游 docker-compose.yaml 的改动，逐条都有实测依据：
+#   1. 端口默认只绑本机 127.0.0.1，避免把默认无鉴权的 WebUI 暴露到局域网
+#   2. 用 WEBUI_SECRET_KEY_FILE 把密钥落盘到数据卷，容器重建后登录态不失效
+#   3. 关闭 HuggingFace hf_xet 高并发下载 —— 穿代理时它会静默挂死
+#      （见 custom_pipes/ARCHITECTURE.md §8.6）
+#   4. 去掉 open-webui 对 ollama 的强依赖，ollama 改为按需拉取
+#      （上游 pull_policy: always 每次 up 都会重拉约 1.5GB）
+#   5. 健康检查给足 start_period：首次冷启动要下约 930MB 向量模型
+#   6. 日志轮转，避免启动期的大量日志把宿主磁盘写满
+# ============================================================================
+services:
+  open-webui:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ghcr.io/open-webui/open-webui:${WEBUI_DOCKER_TAG-main}
+    container_name: open-webui
+    volumes:
+      - open-webui:/app/backend/data
+    ports:
+      - ${OPEN_WEBUI_HOST-127.0.0.1}:${OPEN_WEBUI_PORT-3000}:8080
+    environment:
+      - 'OLLAMA_BASE_URL=http://ollama:11434'
+      - 'WEBUI_SECRET_KEY_FILE=/app/backend/data/.webui_secret_key'
+      # 代理链路不稳定时 hf_xet 会静默挂起；关掉并显式设置超时
+      - 'HF_HUB_DISABLE_XET=1'
+      - 'HF_HUB_DOWNLOAD_TIMEOUT=60'
+      - 'HF_HUB_ETAG_TIMEOUT=30'
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    healthcheck:
+      test: ["CMD-SHELL", "curl --silent --fail http://localhost:8080/health | jq -ne 'input.status == true' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 900s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    restart: unless-stopped
+
+  ollama:
+    image: ollama/ollama:${OLLAMA_DOCKER_TAG-latest}
+    container_name: ollama
+    volumes:
+      - ollama:/root/.ollama
+    # 上游是 pull_policy: always；改成 missing 后，只有镜像不存在时才拉取
+    pull_policy: missing
+    tty: true
+    restart: unless-stopped
+
+volumes:
+  ollama: {}
+  open-webui: {}

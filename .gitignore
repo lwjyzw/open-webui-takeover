@@ -1,0 +1,10 @@
+# 本地/私密文件一律不进仓库
+.env
+*.env
+!.env.example
+*.bak
+*.log
+__pycache__/
+*.py[cod]
+.DS_Store
+settings-store*.json
